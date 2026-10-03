@@ -3,10 +3,18 @@ import tkinter as tk
 import torch
 import torch.nn as nn
 from torchvision import transforms
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 
 # -------------------------------------------------------------------
-# 1. Alphabet CNN Architecture (Phase 2)
+# 1. Fix EMNIST Orientation Helper
+# -------------------------------------------------------------------
+class FixEMNISTOrientation:
+    """Rotates and flips live canvas drawings to match EMNIST layout."""
+    def __call__(self, img):
+        return img.transpose(Image.FLIP_LEFT_RIGHT).rotate(90)
+
+# -------------------------------------------------------------------
+# 2. Alphabet CNN Architecture
 # -------------------------------------------------------------------
 class AlphabetRecognizerCNN(nn.Module):
     def __init__(self, num_classes=26):
@@ -38,7 +46,7 @@ class AlphabetRecognizerCNN(nn.Module):
 INDEX_TO_LETTER = list(string.ascii_uppercase)
 
 # -------------------------------------------------------------------
-# 2. Dual-Pane Alphabet Canvas Application
+# 3. Dual-Pane Alphabet Canvas Application
 # -------------------------------------------------------------------
 class SplitAlphabetCanvasApp:
     def __init__(self, root):
@@ -54,7 +62,7 @@ class SplitAlphabetCanvasApp:
             self.model.eval()
             print("Loaded 'alphabet_recognizer.pth' successfully.")
         except FileNotFoundError:
-            print("Error: 'alphabet_recognizer.pth' not found. Run phase2_alphabets.py first.")
+            print("Error: 'alphabet_recognizer.pth' not found.")
 
         # Canvas Dimensions
         self.pane_width = 400
@@ -83,8 +91,9 @@ class SplitAlphabetCanvasApp:
         self.canvas.bind("<B1-Motion>", self.draw)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
 
-        # EMNIST Transformation Pipeline
+        # Correct Transformation Pipeline for Live Drawing vs EMNIST
         self.transform = transforms.Compose([
+            FixEMNISTOrientation(),  # Fixes the rotation/flip issue
             transforms.ToTensor(),
             transforms.Normalize((0.1736,), (0.3256,))
         ])
@@ -96,7 +105,7 @@ class SplitAlphabetCanvasApp:
         self.canvas.create_text(600, 30, text="REAL LETTER", fill="#888888", font=("Helvetica", 12, "bold"))
 
     def draw(self, event):
-        brush_size = 22
+        brush_size = 24  # Slightly thicker stroke for better feature extraction
         if event.x < self.pane_width:
             self.has_drawn = True
             if self.last_x is not None and self.last_y is not None:
@@ -119,7 +128,16 @@ class SplitAlphabetCanvasApp:
             self.predict_and_display()
 
     def predict_and_display(self):
-        img_resized = self.image_buffer.resize((28, 28), Image.Resampling.BILINEAR)
+        # Center/Crop drawing to prevent scaling artifacts
+        bbox = self.image_buffer.getbbox()
+        if bbox:
+            # Crop to character bounding box and add padding
+            cropped = self.image_buffer.crop(bbox)
+            padded = ImageOps.expand(cropped, border=30, fill=0)
+            img_resized = padded.resize((28, 28), Image.Resampling.BILINEAR)
+        else:
+            img_resized = self.image_buffer.resize((28, 28), Image.Resampling.BILINEAR)
+
         tensor_img = self.transform(img_resized).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
